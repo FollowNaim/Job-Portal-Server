@@ -96,7 +96,21 @@ const run = async () => {
 
     app.post("/jobs/apply", async (req, res) => {
       const result = await appliedJobsCollection.insertOne(req.body);
-      res.send(result);
+      const id = result.jobId;
+      const application = await jobsCollection.findOne({ jobId: id });
+      let count = 0;
+      if (application.application_count) {
+        count = application_count + 1;
+      } else {
+        count = 1;
+      }
+      const updated = {
+        $set: {
+          application_count: count,
+        },
+      };
+      const ress = await jobsCollection.updateOne({ jobId: id }, updated);
+      res.send(ress);
     });
   } catch (err) {
     console.log("something went wrong", err);
