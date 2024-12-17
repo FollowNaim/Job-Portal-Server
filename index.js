@@ -1,12 +1,20 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion } = require("mongodb");
 const app = express();
+const cookieParser = require("cookie-parser");
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: ["http://localhost:5173"],
+    credentials: true,
+  })
+);
 app.use(express.json());
+app.use(cookieParser());
 
 app.get("/", (req, res) => {
   res.send("server is running");
@@ -22,8 +30,28 @@ const client = new MongoClient(uri, {
   },
 });
 
+const verifyToken = (req, res, next) => {
+  const token = req.cookies.token;
+  if (!token) {
+    return res.status("401").send("unauthorized");
+  }
+  console.log(token);
+  jwt.verify(token, process.env.JWT_TOKEN_SECRET, (err, decoded) => {
+    console.log(decoded);
+    if (err) {
+      console.log("inside err", err);
+      return res.status("403").send("forbidden");
+    } else {
+      console.log(decoded);
+      res.decoded = decoded;
+      next();
+    }
+  });
+};
+
 const run = async () => {
   try {
+    client.connect();
     console.log("pinnged your deployment successfully!");
     const db = client.db("job-portal");
     const jobsCollection = db.collection("jobs");
@@ -36,11 +64,19 @@ const run = async () => {
       res.send(result);
     });
 
+    app.post("/jwt", (req, res) => {
+      const token = jwt.sign(req.body, process.env.JWT_TOKEN_SECRET, {
+        expiresIn: "1h",
+      });
+      res.cookie("token", token).send({ succeess: true });
+    });
+
     // get all jobs and limit and query
 
     app.get("/jobs", async (req, res) => {
       const limit = parseInt(req.query.limit) || 0;
       const email = req.query.email;
+      const home = req.query.home;
       if (email) {
         const result = await appliedJobsCollection
           .find({ email: email })
@@ -56,8 +92,17 @@ const run = async () => {
         }
         res.send(result);
       } else {
-        const result = await jobsCollection.find().limit(limit).toArray();
-        res.send(result);
+        if (home) {
+          const result = await jobsCollection
+            .find()
+            .sort({ _id: -1 })
+            .limit(limit)
+            .toArray();
+          res.send(result);
+        } else {
+          const result = await jobsCollection.find().limit(limit).toArray();
+          res.send(result);
+        }
       }
     });
 
@@ -80,15 +125,20 @@ const run = async () => {
 
     app.post("/jobs", async (req, res) => {
       const result = await jobsCollection.insertOne(req.body);
+      console.log(req.body.jobId);
       res.send(result);
     });
 
     // get requireters posted job
 
-    app.get("/posted-jobs", async (req, res) => {
+    app.get("/posted-jobs", verifyToken, async (req, res) => {
       const email = req.query.email;
+      if (res.decoded.email !== email) {
+        return res.status("403").send("access forbidden");
+      }
       console.log(email);
       const result = await jobsCollection.find({ hr_email: email }).toArray();
+
       res.send(result);
     });
 
@@ -96,11 +146,13 @@ const run = async () => {
 
     app.post("/jobs/apply", async (req, res) => {
       const result = await appliedJobsCollection.insertOne(req.body);
-      const id = result.jobId;
+      const id = req.body.jobId;
+      console.log(id);
       const application = await jobsCollection.findOne({ jobId: id });
+      console.log(application);
       let count = 0;
       if (application.application_count) {
-        count = application_count + 1;
+        count = application.application_count + 1;
       } else {
         count = 1;
       }
